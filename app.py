@@ -171,6 +171,7 @@ st.set_page_config(page_title="谷子库自动更新插件", layout="wide")
 st.title("📦 Notion 谷子库自动更新插件")
 st.caption("只需拖入官方 MD 文件和图片压缩包，自动为你查重并更新 Notion 数据库。")
 
+# 侧边栏：让用户输入自己的密钥
 with st.sidebar:
     st.header("🔑 你的专属配置")
     st.info("💡 安全提示：你的 Token 仅在当前浏览器生效，我们不会在服务器保存任何隐私数据。")
@@ -180,11 +181,12 @@ with st.sidebar:
     # 执行防呆清洗
     db_id = clean_database_id(db_id_raw)
 
+# 主界面：文件上传区
 col_md, col_zip = st.columns(2)
 with col_md:
     uploaded_files = st.file_uploader("1️⃣ 上传 Markdown 文件 (.md) [支持多选]", type="md", accept_multiple_files=True)
 with col_zip:
-    uploaded_zip = st.file_uploader("2️⃣ 上传图片压缩包 (.zip) [选填]", type="zip")
+    uploaded_zip = st.file_uploader("2️⃣ 上传图片压缩包 (.zip) [选填]", type="zip", help="如果有新图片，请把包含图片的文件夹打包成 zip 上传。")
 
 if uploaded_files:
     all_dfs = []
@@ -219,16 +221,24 @@ if uploaded_files:
         st.write("---")
         st.subheader("📅 文件名元数据提取")
         col_s, col_d = st.columns(2)
+<<<<<<< HEAD
         with col_s: notion_status_name = st.text_input("Notion [Select / 状态] 属性名", value="状态")
         with col_d: notion_date_name = st.text_input("Notion [Date / 日期] 属性名", value="售卖时间")
+=======
+        with col_s: notion_status_name = st.text_input("Notion [Select / 状态] 属性名", value="系列")
+        with col_d: notion_date_name = st.text_input("Notion [Date / 日期] 属性名", value="")
+>>>>>>> parent of 511aefb (Update app.py)
 
         st.write("---")
         st.subheader("➕ 附加字段映射")
         NOTION_TYPES = ["文本 (Text)", "单选 (Select)", "多选 (Multi-select)", "数字 (Number)", "链接 (URL)", "图片组 -> 放入属性", "图片组 -> 放入正文"]
         
+<<<<<<< HEAD
+=======
+        # 预设几个常用的
+>>>>>>> parent of 511aefb (Update app.py)
         default_extras = [
             {"name": "游戏", "type": "单选 (Select)", "col": "游戏"},
-            {"name": "系列", "type": "单选 (Select)", "col": "系列"},
             {"name": "价格", "type": "数字 (Number)", "col": "价格"},
             {"name": "商品链接", "type": "链接 (URL)", "col": "商品链接"},
             {"name": "款式", "type": "多选 (Multi-select)", "col": "款式"},
@@ -236,7 +246,7 @@ if uploaded_files:
         ]
         
         current_extras = []
-        for i in range(6):
+        for i in range(5):
             def_name = default_extras[i]["name"] if i < len(default_extras) else ""
             def_type = default_extras[i]["type"] if i < len(default_extras) else "文本 (Text)"
             def_col = default_extras[i]["col"] if i < len(default_extras) else md_columns[0]
@@ -260,6 +270,7 @@ if uploaded_files:
                 total_rows = len(final_df)
                 success_count, skip_count = 0, 0
                 
+                # 【云端核心】：解压 ZIP 到服务器的临时内存文件夹
                 temp_dir_context = tempfile.TemporaryDirectory()
                 img_folder = ""
                 if uploaded_zip:
@@ -332,4 +343,5 @@ if uploaded_files:
                         
                     st.success(f"🎉 更新完毕！新增了 {success_count} 条，跳过了 {skip_count} 条已有记录。")
                 finally:
+                    # 运行结束后，立刻从云端服务器彻底删除用户解压出来的图片，保护隐私！
                     temp_dir_context.cleanup()
