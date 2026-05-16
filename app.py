@@ -10,16 +10,6 @@ import tempfile
 # ==========================================
 # 核心模块 1：Markdown 解析与文件名智能提取
 # ==========================================
-def clean_database_id(raw_id):
-    """【新增防呆机制】自动从用户输入的各种奇怪内容（如完整URL、带参数链接）中提取出标准 32 位 Database ID"""
-    if not raw_id: return ""
-    raw_id = raw_id.strip()
-    # 匹配 32 位的纯十六进制字符串，或者带连字符的标准 UUID 格式
-    match = re.search(r'([a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}|[a-f0-9]{32})', raw_id, re.IGNORECASE)
-    if match:
-        return match.group(1).replace('-', '') # Notion API 通常喜欢不带连字符的纯32位ID
-    return raw_id
-
 def extract_metadata_from_filename(filename):
     year, status, start_date, end_date = "", "", "", ""
     year_match = re.search(r'【\s*(\d{4})', filename)
@@ -87,13 +77,15 @@ def find_file_smart(base_folder, target_filename, context_hint=""):
     return found_paths[0] 
 
 # ==========================================
-# 核心模块 2：Notion 数据格式化与强力查重引擎
+# 核心模块 2：Notion 数据格式化引擎
 # ==========================================
 def format_notion_property(prop_type, raw_value):
     if not str(raw_value).strip() or raw_value == "None": return None
     val = str(raw_value).strip()
     try:
+        # 【核心清洗核心逻辑】：清洗带有 "#.../" 的前缀（如 "#系列/KAKACODE" -> "KAKACODE"）
         val = re.sub(r'^#.*?/', '', val).strip()
+
         if prop_type == "文本 (Text)": return {"rich_text": [{"text": {"content": val}}]}
         elif prop_type == "单选 (Select)": return {"select": {"name": val}}
         elif prop_type == "多选 (Multi-select)": 
@@ -131,30 +123,18 @@ def get_existing_notion_titles(token, db_id, title_prop_name):
     existing_titles = set()
     has_more = True
     next_cursor = None
-    
     while has_more:
         payload = {"page_size": 100}
         if next_cursor: payload["start_cursor"] = next_cursor
         res = requests.post(url, headers=headers, json=payload)
-        
-        if res.status_code != 200: 
-            return None, f"Notion API 报错 (错误码 {res.status_code}): {res.text}"
-            
+        if res.status_code != 200: return set() 
         data = res.json()
         for result in data.get("results", []):
-            props = result.get("properties", {})
-            title_obj = props.get(title_prop_name)
-            
-            if title_obj is None:
-                return None, f"在你填写的 Notion 数据库里，找不到名为『{title_prop_name}』的标题属性！请检查网页上的大小写或名字是否与 Notion 严格一致。"
-                
-            title_arr = title_obj.get("title", [])
-            if title_arr: 
-                existing_titles.add(title_arr[0].get("text", {}).get("content", "").strip())
-                
+            title_arr = result.get("properties", {}).get(title_prop_name, {}).get("title", [])
+            if title_arr: existing_titles.add(title_arr[0].get("text", {}).get("content", "").strip())
         has_more = data.get("has_more", False)
         next_cursor = data.get("next_cursor")
-    return existing_titles, None
+    return existing_titles
 
 def create_notion_page(token, db_id, properties_data, children_data=None):
     url = "https://api.notion.com/v1/pages"
@@ -165,28 +145,23 @@ def create_notion_page(token, db_id, properties_data, children_data=None):
     return response.status_code == 200, response.text
 
 # ==========================================
-# 核心模块 3：Streamlit GUI 
+# 核心模块 3：Streamlit GUI (云端优化版)
 # ==========================================
 st.set_page_config(page_title="谷子库自动更新插件", layout="wide")
 st.title("📦 Notion 谷子库自动更新插件")
 st.caption("只需拖入官方 MD 文件和图片压缩包，自动为你查重并更新 Notion 数据库。")
 
-# 侧边栏：让用户输入自己的密钥
 with st.sidebar:
     st.header("🔑 你的专属配置")
     st.info("💡 安全提示：你的 Token 仅在当前浏览器生效，我们不会在服务器保存任何隐私数据。")
     token = st.text_input("Notion Token (Internal Integration Secret)", type="password")
-    db_id_raw = st.text_input("你的 Database ID 或 完整数据库URL")
-    
-    # 执行防呆清洗
-    db_id = clean_database_id(db_id_raw)
+    db_id = st.text_input("你的 Database ID")
 
-# 主界面：文件上传区
 col_md, col_zip = st.columns(2)
 with col_md:
     uploaded_files = st.file_uploader("1️⃣ 上传 Markdown 文件 (.md) [支持多选]", type="md", accept_multiple_files=True)
 with col_zip:
-    uploaded_zip = st.file_uploader("2️⃣ 上传图片压缩包 (.zip) [选填]", type="zip", help="如果有新图片，请把包含图片的文件夹打包成 zip 上传。")
+    uploaded_zip = st.file_uploader("2️⃣ 上传图片压缩包 (.zip) [选填]", type="zip")
 
 if uploaded_files:
     all_dfs = []
@@ -221,24 +196,18 @@ if uploaded_files:
         st.write("---")
         st.subheader("📅 文件名元数据提取")
         col_s, col_d = st.columns(2)
-<<<<<<< HEAD
+        # 【修复点】：文件名提取出来的“限时/返场”重新命名为“状态”，放过表格里的“系列”列
         with col_s: notion_status_name = st.text_input("Notion [Select / 状态] 属性名", value="状态")
         with col_d: notion_date_name = st.text_input("Notion [Date / 日期] 属性名", value="售卖时间")
-=======
-        with col_s: notion_status_name = st.text_input("Notion [Select / 状态] 属性名", value="系列")
-        with col_d: notion_date_name = st.text_input("Notion [Date / 日期] 属性名", value="")
->>>>>>> parent of 511aefb (Update app.py)
 
         st.write("---")
         st.subheader("➕ 附加字段映射")
         NOTION_TYPES = ["文本 (Text)", "单选 (Select)", "多选 (Multi-select)", "数字 (Number)", "链接 (URL)", "图片组 -> 放入属性", "图片组 -> 放入正文"]
         
-<<<<<<< HEAD
-=======
-        # 预设几个常用的
->>>>>>> parent of 511aefb (Update app.py)
+        # 【修复点】：把表格里的“系列”加回到常驻附加字段映射中，完美清洗前缀
         default_extras = [
             {"name": "游戏", "type": "单选 (Select)", "col": "游戏"},
+            {"name": "系列", "type": "单选 (Select)", "col": "系列"},
             {"name": "价格", "type": "数字 (Number)", "col": "价格"},
             {"name": "商品链接", "type": "链接 (URL)", "col": "商品链接"},
             {"name": "款式", "type": "多选 (Multi-select)", "col": "款式"},
@@ -246,7 +215,7 @@ if uploaded_files:
         ]
         
         current_extras = []
-        for i in range(5):
+        for i in range(6):
             def_name = default_extras[i]["name"] if i < len(default_extras) else ""
             def_type = default_extras[i]["type"] if i < len(default_extras) else "文本 (Text)"
             def_col = default_extras[i]["col"] if i < len(default_extras) else md_columns[0]
@@ -270,7 +239,6 @@ if uploaded_files:
                 total_rows = len(final_df)
                 success_count, skip_count = 0, 0
                 
-                # 【云端核心】：解压 ZIP 到服务器的临时内存文件夹
                 temp_dir_context = tempfile.TemporaryDirectory()
                 img_folder = ""
                 if uploaded_zip:
@@ -282,16 +250,11 @@ if uploaded_files:
                 try:
                     existing_items = set()
                     if enable_deduplication:
-                        status_text.text("🔍 正在安全扫描你的 Notion 库寻找已购商品...")
-                        existing_items, error_msg = get_existing_notion_titles(token, db_id, notion_title_name)
-                        if error_msg:
-                            st.error(f"❌ 查重引擎启动失败！原因：{error_msg}")
-                            st.stop()
-                        else:
-                            st.info(f"💡 查重扫描成功！在 Notion 中发现了 {len(existing_items)} 个已有商品。")
+                        status_text.text("🔍 正在扫描你的 Notion 库寻找已购商品...")
+                        existing_items = get_existing_notion_titles(token, db_id, notion_title_name)
                     
                     for index, row in final_df.iterrows():
-                        current_item_name = str(row[md_title_col]).strip() if md_title_col != "忽略此列 (不导入)" else ""
+                        current_item_name = str(row[md_title_col]).strip() if md_title_col != "忽略此列 (不导入) border" else ""
                         if enable_deduplication and current_item_name in existing_items:
                             status_text.text(f"⏭️ [{current_item_name}] 已存在，跳过 ({index+1}/{total_rows})")
                             skip_count += 1
@@ -343,5 +306,4 @@ if uploaded_files:
                         
                     st.success(f"🎉 更新完毕！新增了 {success_count} 条，跳过了 {skip_count} 条已有记录。")
                 finally:
-                    # 运行结束后，立刻从云端服务器彻底删除用户解压出来的图片，保护隐私！
                     temp_dir_context.cleanup()
