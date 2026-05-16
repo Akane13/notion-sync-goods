@@ -77,15 +77,13 @@ def find_file_smart(base_folder, target_filename, context_hint=""):
     return found_paths[0] 
 
 # ==========================================
-# 核心模块 2：Notion 数据格式化引擎
+# 核心模块 2：Notion 数据格式化与【强力查重】引擎
 # ==========================================
 def format_notion_property(prop_type, raw_value):
     if not str(raw_value).strip() or raw_value == "None": return None
     val = str(raw_value).strip()
     try:
-        # 【核心清洗核心逻辑】：清洗带有 "#.../" 的前缀（如 "#系列/KAKACODE" -> "KAKACODE"）
         val = re.sub(r'^#.*?/', '', val).strip()
-
         if prop_type == "文本 (Text)": return {"rich_text": [{"text": {"content": val}}]}
         elif prop_type == "单选 (Select)": return {"select": {"name": val}}
         elif prop_type == "多选 (Multi-select)": 
@@ -118,23 +116,37 @@ def upload_local_file_to_notion(local_file_path, token, version):
     return upload_id
 
 def get_existing_notion_titles(token, db_id, title_prop_name):
+    """【硬核升级】严格查重，遇到任何错误直接拦截报错，不再默默跳过"""
     url = f"https://api.notion.com/v1/databases/{db_id}/query"
     headers = {"Authorization": f"Bearer {token}", "Notion-Version": "2025-09-03", "Content-Type": "application/json"}
     existing_titles = set()
     has_more = True
     next_cursor = None
+    
     while has_more:
         payload = {"page_size": 100}
         if next_cursor: payload["start_cursor"] = next_cursor
         res = requests.post(url, headers=headers, json=payload)
-        if res.status_code != 200: return set() 
+        
+        if res.status_code != 200: 
+            return None, f"Notion API 报错 (错误码 {res.status_code}): {res.text}"
+            
         data = res.json()
         for result in data.get("results", []):
-            title_arr = result.get("properties", {}).get(title_prop_name, {}).get("title", [])
-            if title_arr: existing_titles.add(title_arr[0].get("text", {}).get("content", "").strip())
+            props = result.get("properties", {})
+            title_obj = props.get(title_prop_name)
+            
+            # 校验用户填写的标题列是否存在
+            if title_obj is None:
+                return None, f"在你填写的 Notion 数据库里，找不到名为『{title_prop_name}』的标题属性！请检查网页上的大小写或名字是否与 Notion 严格一致。"
+                
+            title_arr = title_obj.get("title", [])
+            if title_arr: 
+                existing_titles.add(title_arr[0].get("text", {}).get("content", "").strip())
+                
         has_more = data.get("has_more", False)
         next_cursor = data.get("next_cursor")
-    return existing_titles
+    return existing_titles, None
 
 def create_notion_page(token, db_id, properties_data, children_data=None):
     url = "https://api.notion.com/v1/pages"
@@ -145,7 +157,7 @@ def create_notion_page(token, db_id, properties_data, children_data=None):
     return response.status_code == 200, response.text
 
 # ==========================================
-# 核心模块 3：Streamlit GUI (云端优化版)
+# 核心模块 3：Streamlit GUI 
 # ==========================================
 st.set_page_config(page_title="谷子库自动更新插件", layout="wide")
 st.title("📦 Notion 谷子库自动更新插件")
@@ -196,7 +208,6 @@ if uploaded_files:
         st.write("---")
         st.subheader("📅 文件名元数据提取")
         col_s, col_d = st.columns(2)
-        # 【修复点】：文件名提取出来的“限时/返场”重新命名为“状态”，放过表格里的“系列”列
         with col_s: notion_status_name = st.text_input("Notion [Select / 状态] 属性名", value="状态")
         with col_d: notion_date_name = st.text_input("Notion [Date / 日期] 属性名", value="售卖时间")
 
@@ -204,7 +215,6 @@ if uploaded_files:
         st.subheader("➕ 附加字段映射")
         NOTION_TYPES = ["文本 (Text)", "单选 (Select)", "多选 (Multi-select)", "数字 (Number)", "链接 (URL)", "图片组 -> 放入属性", "图片组 -> 放入正文"]
         
-        # 【修复点】：把表格里的“系列”加回到常驻附加字段映射中，完美清洗前缀
         default_extras = [
             {"name": "游戏", "type": "单选 (Select)", "col": "游戏"},
             {"name": "系列", "type": "单选 (Select)", "col": "系列"},
@@ -250,11 +260,17 @@ if uploaded_files:
                 try:
                     existing_items = set()
                     if enable_deduplication:
-                        status_text.text("🔍 正在扫描你的 Notion 库寻找已购商品...")
-                        existing_items = get_existing_notion_titles(token, db_id, notion_title_name)
+                        status_text.text("🔍 正在安全扫描你的 Notion 库寻找已购商品...")
+                        # 【硬核改造】：如果获取失败，直接抛错并中断程序，绝不出重
+                        existing_items, error_msg = get_existing_notion_titles(token, db_id, notion_title_name)
+                        if error_msg:
+                            st.error(f"❌ 查重引擎启动失败！原因：{error_msg}")
+                            st.stop() # 强行终止，保护数据库
+                        else:
+                            st.info(f"💡 查重扫描成功！在 Notion 中发现了 {len(existing_items)} 个已有商品。")
                     
                     for index, row in final_df.iterrows():
-                        current_item_name = str(row[md_title_col]).strip() if md_title_col != "忽略此列 (不导入) border" else ""
+                        current_item_name = str(row[md_title_col]).strip() if md_title_col != "忽略此列 (不导入)" else ""
                         if enable_deduplication and current_item_name in existing_items:
                             status_text.text(f"⏭️ [{current_item_name}] 已存在，跳过 ({index+1}/{total_rows})")
                             skip_count += 1
