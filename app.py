@@ -10,6 +10,16 @@ import tempfile
 # ==========================================
 # 核心模块 1：Markdown 解析与文件名智能提取
 # ==========================================
+def clean_database_id(raw_id):
+    """【新增防呆机制】自动从用户输入的各种奇怪内容（如完整URL、带参数链接）中提取出标准 32 位 Database ID"""
+    if not raw_id: return ""
+    raw_id = raw_id.strip()
+    # 匹配 32 位的纯十六进制字符串，或者带连字符的标准 UUID 格式
+    match = re.search(r'([a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}|[a-f0-9]{32})', raw_id, re.IGNORECASE)
+    if match:
+        return match.group(1).replace('-', '') # Notion API 通常喜欢不带连字符的纯32位ID
+    return raw_id
+
 def extract_metadata_from_filename(filename):
     year, status, start_date, end_date = "", "", "", ""
     year_match = re.search(r'【\s*(\d{4})', filename)
@@ -77,7 +87,7 @@ def find_file_smart(base_folder, target_filename, context_hint=""):
     return found_paths[0] 
 
 # ==========================================
-# 核心模块 2：Notion 数据格式化与【强力查重】引擎
+# 核心模块 2：Notion 数据格式化与强力查重引擎
 # ==========================================
 def format_notion_property(prop_type, raw_value):
     if not str(raw_value).strip() or raw_value == "None": return None
@@ -116,7 +126,6 @@ def upload_local_file_to_notion(local_file_path, token, version):
     return upload_id
 
 def get_existing_notion_titles(token, db_id, title_prop_name):
-    """【硬核升级】严格查重，遇到任何错误直接拦截报错，不再默默跳过"""
     url = f"https://api.notion.com/v1/databases/{db_id}/query"
     headers = {"Authorization": f"Bearer {token}", "Notion-Version": "2025-09-03", "Content-Type": "application/json"}
     existing_titles = set()
@@ -136,7 +145,6 @@ def get_existing_notion_titles(token, db_id, title_prop_name):
             props = result.get("properties", {})
             title_obj = props.get(title_prop_name)
             
-            # 校验用户填写的标题列是否存在
             if title_obj is None:
                 return None, f"在你填写的 Notion 数据库里，找不到名为『{title_prop_name}』的标题属性！请检查网页上的大小写或名字是否与 Notion 严格一致。"
                 
@@ -167,7 +175,10 @@ with st.sidebar:
     st.header("🔑 你的专属配置")
     st.info("💡 安全提示：你的 Token 仅在当前浏览器生效，我们不会在服务器保存任何隐私数据。")
     token = st.text_input("Notion Token (Internal Integration Secret)", type="password")
-    db_id = st.text_input("你的 Database ID")
+    db_id_raw = st.text_input("你的 Database ID 或 完整数据库URL")
+    
+    # 执行防呆清洗
+    db_id = clean_database_id(db_id_raw)
 
 col_md, col_zip = st.columns(2)
 with col_md:
@@ -261,11 +272,10 @@ if uploaded_files:
                     existing_items = set()
                     if enable_deduplication:
                         status_text.text("🔍 正在安全扫描你的 Notion 库寻找已购商品...")
-                        # 【硬核改造】：如果获取失败，直接抛错并中断程序，绝不出重
                         existing_items, error_msg = get_existing_notion_titles(token, db_id, notion_title_name)
                         if error_msg:
                             st.error(f"❌ 查重引擎启动失败！原因：{error_msg}")
-                            st.stop() # 强行终止，保护数据库
+                            st.stop()
                         else:
                             st.info(f"💡 查重扫描成功！在 Notion 中发现了 {len(existing_items)} 个已有商品。")
                     
